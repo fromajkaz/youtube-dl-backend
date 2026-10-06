@@ -9,6 +9,7 @@ app.use(cors());
 app.use(express.json());
 
 const TMP_DIR = '/tmp/downloads';
+
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
 // Простой секретный ключ, чтобы никто чужой не использовал твой сервер
@@ -25,10 +26,12 @@ app.post('/api/download', (req, res) => {
     return res.status(400).json({ error: 'URL обязателен' });
   }
 
-  // Разрешаем только YouTube
-  if (!/^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(url)) {
-    return res.status(400).json({ error: 'Только YouTube ссылки' });
-  }
+const isYouTube = /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(url);
+const isTikTok = /^https?:\/\/(www\.)?tiktok\.com\//i.test(url);
+
+if (!isYouTube && !isTikTok) {
+  return res.status(400).json({ error: 'Только YouTube или TikTok ссылки' });
+}
 
   // Чистим папку от старых файлов на всякий случай
   fs.readdirSync(TMP_DIR).forEach((f) => {
@@ -37,8 +40,19 @@ app.post('/api/download', (req, res) => {
 
   const outputTemplate = path.join(TMP_DIR, '%(title).100s.%(ext)s');
 
-  let formatStr;
-  let isAudio = false;
+let formatStr;
+let isAudio = false;
+
+if (isTikTok) {
+  // TikTok: один готовый файл, никаких склеек
+  if (quality === 'audio') {
+    formatStr = 'bestaudio/best';
+    isAudio = true;
+  } else {
+    formatStr = 'best'; // лучшее что есть одним файлом
+  }
+} else {
+  // YouTube: раздельные потоки видео + аудио, склейка через ffmpeg
   switch (quality) {
     case 'audio':
       formatStr = 'bestaudio/best';
@@ -56,6 +70,7 @@ app.post('/api/download', (req, res) => {
     default:
       formatStr = 'bestvideo+bestaudio/best';
   }
+}
 
   const args = [
     url,
