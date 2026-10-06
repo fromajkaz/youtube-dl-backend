@@ -9,11 +9,22 @@ app.use(cors());
 app.use(express.json());
 
 const TMP_DIR = '/tmp/downloads';
-
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
-// Простой секретный ключ, чтобы никто чужой не использовал твой сервер
+// Секретный ключ (задаётся через переменные окружения Railway)
 const SECRET = process.env.API_SECRET || 'change-me';
+
+// Cookies для YouTube (из base64 в env)
+const COOKIES_PATH = '/tmp/cookies.txt';
+if (process.env.YOUTUBE_COOKIES_B64) {
+  try {
+    const buf = Buffer.from(process.env.YOUTUBE_COOKIES_B64, 'base64');
+    fs.writeFileSync(COOKIES_PATH, buf);
+    console.log('✅ Cookies loaded');
+  } catch (e) {
+    console.error('Failed to decode cookies:', e);
+  }
+}
 
 app.post('/api/download', (req, res) => {
   const { url, quality = 'best', secret } = req.body;
@@ -26,35 +37,22 @@ app.post('/api/download', (req, res) => {
     return res.status(400).json({ error: 'URL обязателен' });
   }
 
-const isYouTube = /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(url);
-const isTikTok = /^https?:\/\/(www\.)?tiktok\.com\//i.test(url);
-
-if (!isYouTube && !isTikTok) {
-  return res.status(400).json({ error: 'Только YouTube или TikTok ссылки' });
-}
-
-  // Чистим папку от старых файлов на всякий случай
-  fs.readdirSync(TMP_DIR).forEach((f) => {
-    try { fs.unlinkSync(path.join(TMP_DIR, f)); } catch (_) {}
-  });
-
-  const outputTemplate = path.join(TMP_DIR, '%(title).100s.%(ext)s');
-
-let formatStr;
-let isAudio = false;
-
-if (isTikTok) {
-   args.push('--impersonate', 'chrome-131');
-  args.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36');
-  // TikTok: один готовый файл, никаких склеек
-  if (quality === 'audio') {
-    formatStr = 'bestaudio/best';
-    isAudio = true;
-  } else {
-    formatStr = 'best'; // лучшее что есть одним файлом
+  // Разрешаем только YouTube
+  if (!/^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(url)) {
+    return res.status(400).json({ error: 'Только YouTube ссылки' });
   }
-} else {
-  // YouTube: раздельные потоки видео + аудио, склейка через ffmpeg
+
+  // Уникальная подпапка для каждого запроса (fix race condition)
+  const jobId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const jobDir = path.join(TMP_DIR, jobId);
+  fs.mkdirSync(jobDir, { recursive: true });
+
+  const outputTemplate = path.join(jobDir, '%(title).100s.%(ext)s');
+
+  // Выбор формата
+  let formatStr;
+  let isAudio = false;
+
   switch (quality) {
     case 'audio':
       formatStr = 'bestaudio/best';
@@ -72,7 +70,6 @@ if (isTikTok) {
     default:
       formatStr = 'bestvideo+bestaudio/best';
   }
-}
 
   const args = [
     url,
@@ -82,6 +79,10 @@ if (isTikTok) {
     '--no-check-certificates',
     '--no-warnings',
   ];
+
+  if (fs.existsSync(COOKIES_PATH)) {
+    args.push('--cookies', COOKIES_PATH);
+  }
 
   if (isAudio) {
     args.push('-x', '--audio-format', 'mp3');
@@ -97,6 +98,7 @@ if (isTikTok) {
 
   ytdlp.on('error', (err) => {
     console.error('spawn error:', err);
+    fs.rm(jobDir, { recursive: true, force: true }, () => {});
     if (!res.headersSent) {
       res.status(500).json({ error: 'yt-dlp не запустился', detail: err.message });
     }
@@ -105,6 +107,7 @@ if (isTikTok) {
   ytdlp.on('close', (code) => {
     if (code !== 0) {
       console.error('yt-dlp exit code', code, stderrData.slice(-1000));
+      fs.rm(jobDir, { recursive: true, force: true }, () => {});
       if (!res.headersSent) {
         return res.status(500).json({
           error: 'Скачивание не удалось',
@@ -114,22 +117,20 @@ if (isTikTok) {
       return;
     }
 
-    const files = fs.readdirSync(TMP_DIR).filter((f) =>
+    const files = fs.readdirSync(jobDir).filter((f) =>
       ['.mp4', '.mp3', '.webm', '.mkv'].includes(path.extname(f).toLowerCase())
     );
 
     if (files.length === 0) {
+      fs.rm(jobDir, { recursive: true, force: true }, () => {});
       return res.status(500).json({ error: 'Файл не создан' });
     }
 
-    const filePath = path.join(TMP_DIR, files[0]);
+    const filePath = path.join(jobDir, files[0]);
     const stat = fs.statSync(filePath);
     const fileName = files[0];
 
-    res.setHeader(
-      'Content-Type',
-      isAudio ? 'audio/mpeg' : 'video/mp4'
-    );
+    res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
     res.setHeader('Content-Length', stat.size);
     res.setHeader(
       'Content-Disposition',
@@ -140,11 +141,11 @@ if (isTikTok) {
     stream.pipe(res);
 
     stream.on('end', () => {
-      fs.unlink(filePath, () => {});
+      fs.rm(jobDir, { recursive: true, force: true }, () => {});
     });
     stream.on('error', (err) => {
       console.error('stream error:', err);
-      fs.unlink(filePath, () => {});
+      fs.rm(jobDir, { recursive: true, force: true }, () => {});
     });
   });
 });
