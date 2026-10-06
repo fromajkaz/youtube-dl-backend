@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir --break-system-packages yt-dlp
+RUN pip3 install --no-cache-dir --break-system-packages --pre "yt-dlp[default]"
 
 WORKDIR /app
 

@@ -44,6 +44,7 @@ let formatStr;
 let isAudio = false;
 
 if (isTikTok) {
+  args.push('--impersonate', 'chrome-131');
   // TikTok: один готовый файл, никаких склеек
   if (quality === 'audio') {
     formatStr = 'bestaudio/best';
