@@ -42,14 +42,14 @@ app.post('/api/download', (req, res) => {
     return res.status(400).json({ error: 'Только YouTube ссылки' });
   }
 
-  // Уникальная подпапка для каждого запроса (fix race condition)
+  // Уникальная подпапка для каждого запроса
   const jobId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const jobDir = path.join(TMP_DIR, jobId);
   fs.mkdirSync(jobDir, { recursive: true });
 
   const outputTemplate = path.join(jobDir, '%(title).100s.%(ext)s');
 
-  // Выбор формата
+  // Выбор формата (обновлённый, с fallback)
   let formatStr;
   let isAudio = false;
 
@@ -59,13 +59,13 @@ app.post('/api/download', (req, res) => {
       isAudio = true;
       break;
     case '1080':
-      formatStr = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]';
+      formatStr = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best';
       break;
     case '720':
-      formatStr = 'bestvideo[height<=720]+bestaudio/best[height<=720]';
+      formatStr = 'bestvideo[height<=720]+bestaudio/best[height<=720]/best';
       break;
     case '480':
-      formatStr = 'bestvideo[height<=480]+bestaudio/best[height<=480]';
+      formatStr = 'bestvideo[height<=480]+bestaudio/best[height<=480]/best';
       break;
     default:
       formatStr = 'bestvideo+bestaudio/best';
